@@ -19,6 +19,7 @@ package com.aerospike.examples.frequencycap;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.List;
 import java.util.Random;
@@ -43,15 +44,15 @@ import com.aerospike.client.policy.WritePolicy;
 @author Peter Milne
  */
 public class FrequencyCap {
+	private static final String COMPOUND_KEY_SET = "freq_compound_key";
+	private static final String BIN_SET = "freq_date_in_bin";
 	private static final int TOTAL_DATA = 5000;
 	private static final int USER_SAMPLE = 100;
+	private static final long RANDOM_SEED = 3690;
 	private AerospikeClient client;
 	private String seedHost;
 	private int port;
 	private String namespace;
-	private String set;
-	private WritePolicy writePolicy;
-	private Policy policy;
 	String[] campaigh = new String[] {
 			"Shoes",
 			"Cats",
@@ -70,7 +71,7 @@ public class FrequencyCap {
 			"Boats",
 			"Planes"
 	};
-	SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd");
+	SimpleDateFormat dateFormat = new SimpleDateFormat("yyyyMMdd");
 
 	private static Logger log = Logger.getLogger(FrequencyCap.class);
 	public FrequencyCap(String host, int port, String namespace, String set) throws AerospikeException {
@@ -78,16 +79,10 @@ public class FrequencyCap {
 		this.seedHost = host;
 		this.port = port;
 		this.namespace = namespace;
-		this.set = set;
-		this.writePolicy = new WritePolicy();
-		this.policy = new Policy();
 	}
 	public FrequencyCap(AerospikeClient client, String namespace, String set) throws AerospikeException {
 		this.client = client;
 		this.namespace = namespace;
-		this.set = set;
-		this.writePolicy = new WritePolicy();
-		this.policy = new Policy();
 	}
 	public static void main(String[] args) throws AerospikeException {
 		try {
@@ -95,7 +90,6 @@ public class FrequencyCap {
 			options.addOption("h", "host", true, "Server hostname (default: 172.28.128.6)");
 			options.addOption("p", "port", true, "Server port (default: 3000)");
 			options.addOption("n", "namespace", true, "Namespace (default: test)");
-			options.addOption("s", "set", true, "Set (default: demo)");
 			options.addOption("u", "usage", false, "Print usage.");
 
 			options.addOption("l", "load", false, "Load data.");
@@ -122,11 +116,13 @@ public class FrequencyCap {
 			}
 
 			FrequencyCap as = new FrequencyCap(host, port, namespace, set);
-			if (cl.hasOption("l"))
-				as.generateData();
-			else
-				as.simulateWork();
-
+			if (cl.hasOption("l")){
+				as.generateDataDateInKey();
+				as.generateDataDateInBin();
+			} else {
+				as.simulateWorkDateInKey();
+				as.simulateWorkDateInBin();
+			}
 		} catch (Exception e) {
 			log.error("Critical error", e);
 		}
@@ -144,13 +140,14 @@ public class FrequencyCap {
 	}
 	/**
 	 * This method produces a random number of campaigns and views for each user
-	 * over the past 10 days
+	 * over the past 10 days, with the Date as part of the key.
 	 * @throws Exception
 	 */
-	public void generateData() throws Exception {
-		Random campaignR = new Random();
-		Random dayR = new Random();
-		Random viewsR = new Random();
+	public void generateDataDateInKey() throws Exception {
+		log.info("Generating data using Date in Key");
+		Random campaignR = new Random(RANDOM_SEED);
+		Random dayR = new Random(RANDOM_SEED);
+		Random viewsR = new Random(RANDOM_SEED);
 		this.client.writePolicyDefault.expiration = 60 * 60 * 24 * 10; // 10 days
 
 
@@ -169,25 +166,67 @@ public class FrequencyCap {
 					calendar.add(Calendar.DATE, -day);
 					String dateString =  dateFormat.format(calendar.getTime());
 					String keyString = userID+":"+campaignID+":"+dateString;
-					Key key = new Key("test", "demo", keyString);
+					Key key = new Key(this.namespace, COMPOUND_KEY_SET, keyString);
 					this.client.put(null, key, new Bin("FREQ", viewsR.nextInt(5)));
 				}
 			}
 			if (i % 500 == 0){
-				log.info(String.format("%d processed", i));
+				log.info(String.format("%d date in Key", i));
 			}
 		}
-		log.info(String.format("loaded %d", TOTAL_DATA));
+		log.info(String.format("loaded %d date in key", TOTAL_DATA));
 	}
 	/**
-	 * For USER_SAMPLE print the frequency for each campaign
+	 * This method produces a random number of campaigns and views for each user
+	 * over the past 10 days, with the Date as a bin
 	 * @throws Exception
 	 */
-	public void simulateWork() throws Exception {
-		log.info("Count in the last 10 days by user and campaign");
+	public void generateDataDateInBin() throws Exception {
+		log.info("Generating data using Date in Bins");
+		Random campaignR = new Random(RANDOM_SEED);
+		Random dayR = new Random(RANDOM_SEED);
+		Random viewsR = new Random(RANDOM_SEED);
+		this.client.writePolicyDefault.expiration = 60 * 60 * 24 * 10; // 10 days
+
+
+		for (int i = 0; i < TOTAL_DATA; i++){
+			String userID = "user-id-"+i;
+			int campaignTotal = campaignR.nextInt(campaigh.length);
+			for (int c = 0; c < campaignTotal; c++){
+				String campaignID = campaigh[c];
+				/*
+				 * Generate user activity in the past 10 days
+				 */
+				List<Bin> binList = new ArrayList<Bin>();
+				
+				int noOfDays = dayR.nextInt(10);
+				for (int y = noOfDays; y >= 0; y--){
+					int day = dayR.nextInt(10);
+					Calendar calendar = Calendar.getInstance(); 
+					calendar.add(Calendar.DATE, -day);
+					String binName =  dateFormat.format(calendar.getTime());
+					binList.add(new Bin(binName, viewsR.nextInt(5)));
+				}
+				String keyString = userID+":"+campaignID;
+				Key key = new Key(this.namespace, BIN_SET, keyString);
+				this.client.put(null, key, binList.toArray(new Bin[0]));
+			}
+			if (i % 500 == 0){
+				log.info(String.format("%d date in Bins", i));
+			}
+		}
+		log.info(String.format("loaded %d date in Bins", TOTAL_DATA));
+	}
+	/**
+	 * For USER_SAMPLE print the frequency for each campaign using Date in key
+	 * @throws Exception
+	 */
+	public void simulateWorkDateInKey() throws Exception {
+		log.info("***** Count in the last 10 days by user and campaign, Date in Key");
 		for (int i = 0; i < USER_SAMPLE; i++){
 			String userID = "user-id-"+i;
-			log.info(String.format("%s", userID));
+			long start = System.currentTimeMillis();
+			int count = 0;
 			for (int camp = 0; camp < campaigh.length; camp++){
 				String campaignID = campaigh[camp];
 				Calendar calendar = Calendar.getInstance(); 
@@ -196,23 +235,64 @@ public class FrequencyCap {
 					calendar.add(Calendar.DATE, -day);
 					String dateString =  dateFormat.format(calendar.getTime());
 					String keyString = userID+":"+campaignID+":"+dateString;
-					keys[day] = new Key("test", "demo", keyString);
+					keys[day] = new Key(this.namespace, COMPOUND_KEY_SET, keyString);
 				}
 				/*
 				 * get all the records, note that some may be missing
 				 */
 				Record[] records = this.client.get(null, keys);
-				int count = 0;
 				for (Record rec : records){
 					if (rec != null){
-						count += rec.getInt("FREQ");
+						Long value = rec.getLong("FREQ");
+						if (value != null && value > 0){
+							count ++;
+						}
 					}
-
 				}
-				if (count > 0)
-					log.info(String.format("\t%s %d", campaignID, count));
 			}
+			long stop = System.currentTimeMillis();
+			log.info(String.format("User:%s, Campaigns:%d, Time %d milliseconds", userID, count, stop-start));
 		}
+	}
+	/**
+	 * For USER_SAMPLE print the frequency for each campaign using Date in Bin
+	 * @throws Exception
+	 */
+	public void simulateWorkDateInBin() throws Exception {
+		log.info("***** Count in the last 10 days by user and campaign, Date in Bin");
+		for (int i = 0; i < USER_SAMPLE; i++){
+			String userID = "user-id-"+i;
+			long start = System.currentTimeMillis();
+			int count = 0;
+			for (int camp = 0; camp < campaigh.length; camp++){
+				String campaignID = campaigh[camp];
+				String keyString = userID+":"+campaignID;
+				List<String> binList = new ArrayList<String>();
+				Key key = new Key(this.namespace, BIN_SET, keyString);
+				Calendar calendar = Calendar.getInstance(); 
+				Key[] keys = new Key[10];
+				for (int day = 0; day < 10; day++){
+					calendar.add(Calendar.DATE, -day);
+					String binName =  dateFormat.format(calendar.getTime());
+					binList.add(binName);
+				}
+				/*
+				 * get all the records, note that some may be missing
+				 */
+				Record record = this.client.get(null, key, binList.toArray(new String[0]));
+				if (record != null){
+					for (String day : binList){
+						Long value = record.getLong(day);
+						if (value != null && value > 0){
+							count ++;
+						}
+					}
+				}
+			}
+			long stop = System.currentTimeMillis();
+			log.info(String.format("User:%s, Campaigns:%d, Time %d milliseconds", userID, count, stop-start));
+		}
+		
 	}
 
 }
