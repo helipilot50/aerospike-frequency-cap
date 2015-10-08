@@ -270,7 +270,6 @@ public class FrequencyCap {
 				List<String> binList = new ArrayList<String>();
 				Key key = new Key(this.namespace, BIN_SET, keyString);
 				Calendar calendar = Calendar.getInstance(); 
-				Key[] keys = new Key[10];
 				for (int day = 0; day < 10; day++){
 					calendar.add(Calendar.DATE, -day);
 					String binName =  dateFormat.format(calendar.getTime());
